@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // عدد أيام كل خطة
+    function planDays(d) {
+      let p = d.get('plan', 'yearly');
+      return p == 'trial' ? 7 : (p == 'monthly' ? 30 : 365);
+    }
+
+    // الترخيص ساري: نشيط، ولم تنتهِ مدته (من expires القديم أو من activated + أيام الخطة)
+    function validLic(d) {
+      return d.status == 'active'
+        && ( ('expires' in d) ? d.expires > request.time
+             : ( ('activated' in d) ? d.activated + duration.value(planDays(d), 'd') > request.time : true ) );
+    }
+
+    // هل صاحب هذا الكود هو المستخدم الحالي وترخيصه ساري؟
+    function secretOk(code) {
+      let l = get(/databases/$(database)/documents/licenses/$(code)).data;
+      return validLic(l) && l.get('uid', '') == request.auth.uid;
+    }
+
+    match /licenses/{code} {
+
+      allow get: if request.auth != null && (
+        ( validLic(resource.data)
+          && (!('uid' in resource.data) || resource.data.uid == request.auth.uid) )
+        || ( resource.data.status == 'pending' && resource.data.uid == request.auth.uid )
+      );
+
+      // طلب كود جديد من التطبيق: دائماً pending وبحقول محددة فقط
+      allow create: if request.auth != null
+        && code.matches('TONY-[A-Z2-9]{6}')
+        && request.resource.data.keys().hasOnly(['status','plan','name','phone','uid'])
+        && request.resource.data.status == 'pending'
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.plan in ['trial','monthly','yearly']
+        && request.resource.data.name is string && request.resource.data.name.size() <= 60
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 20;
+
+      // ربط الجهاز للأكواد القديمة التي أنشأتها يدوياً (بدون uid)
+      allow update: if request.auth != null
+        && resource.data.status == 'active'
+        && !('uid' in resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid;
+
+      // ختم وقت أول تفعيل (مرة واحدة) لحساب مدة الاشتراك
+      allow update: if request.auth != null
+        && resource.data.status == 'active'
+        && !('expires' in resource.data)
+        && !('activated' in resource.data)
+        && resource.data.get('uid', '') == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['activated'])
+        && request.resource.data.activated == request.time;
+
+      allow list, delete: if false;
+    }
+
+    // ربط جهاز العميل بكوده (حتى يقرأ المفتاح السري)
+    match /bound/{uid} {
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['code'])
+        && request.resource.data.code is string
+        && get(/databases/$(database)/documents/licenses/$(request.resource.data.code)).data.uid == request.auth.uid;
+      allow read, delete: if false;
+    }
+
+    // المفتاح السري: مخزّن مرة واحدة، ولا يقرؤه إلا صاحب ترخيص ساري
+    match /secret/{id} {
+      allow get: if request.auth != null && id == 'main'
+        && exists(/databases/$(database)/documents/bound/$(request.auth.uid))
+        && secretOk(get(/databases/$(database)/documents/bound/$(request.auth.uid)).data.code);
+      allow list, write: if false;
+    }
+
+    match /ads/{id} {
+      allow get, list: if request.auth != null && resource.data.active == true;
+      allow write: if false;
+    }
+  }
+}
