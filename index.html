@@ -719,7 +719,7 @@ setInterval(()=>{const o=ld();if(o&&o.c)run(o.c)},36e5);
 <script>
 /* ===== نظام التحديث ===== */
 (function(){
-const VER="2026.11.09-2",$=id=>document.getElementById(id);window.APP_VER=VER;
+const VER="2026.11.10-1",$=id=>document.getElementById(id);window.APP_VER=VER;
 async function doUpd(){
  try{if("serviceWorker"in navigator){const rs=await navigator.serviceWorker.getRegistrations();await Promise.all(rs.map(r=>r.unregister()))}}catch(e){}
  try{if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)))}}catch(e){}
